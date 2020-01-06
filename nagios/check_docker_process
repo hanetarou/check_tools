@@ -1,0 +1,20 @@
+#!/bin/bash
+
+set -u
+
+SERVICE=docker
+CHK_CMD="/usr/sbin/service $SERVICE status"
+
+OK=0
+CRITICAL=2
+
+ssh $1 "$CHK_CMD" >/dev/null 2>&1
+ret=$?
+
+if [ $ret -eq 0 ]; then
+  echo "Docker Process OK"
+  exit $OK
+else
+  echo "Docker Process NG"
+  exit $2
+fi

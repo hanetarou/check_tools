@@ -1,0 +1,90 @@
+#!/bin/bash
+
+function usage(){
+  cat << EOL
+  Usage
+    $(basename $0) IPaddress
+EOL
+exit 0
+
+}
+
+# arguments
+[ $# -eq 0 ] && usage
+HOST=$1
+
+# temp file
+TMP=`mktemp`
+
+# Nagios status
+RET_OK=0
+RET_WARN=1
+RET_CRIT=2
+RET_UNKNOWN=3
+
+# Check parameter
+WARN_FLAG=0
+WARN_SUM=0
+CRIT_FLAG=0
+CRIT_SUM=0
+IGNORE_FLAG=0
+
+# 結果出力して終了
+function printResult() {
+  cat $TMP
+  rm -f $TMP
+  exit $1
+}
+
+#
+# Main
+#
+
+# SSHして、dfコマンド実行
+echo "############## df -h ##############" >$TMP
+ssh $HOST "LANG=C df -h" >>$TMP 2>&1
+
+# df結果を格納(NFSに問題があると、戻り値は0でない)
+NFS_RESULT=$?
+
+# SSHして、mountコマンド実行
+echo "############## mount ##############" >>$TMP
+ssh $HOST "mount" >>$TMP 2>&1
+
+# mount結果を格納(ReadOnlyだと、戻り値は0でない)
+MOUNT_RESULT=$?
+
+# NFSとReadOnlyエラー
+if   [ $NFS_RESULT -ne 0 -a $MOUNT_RESULT -ne 0 ]; then
+  echo "NFS mount and ReadOnly CRIT"
+  printResult $RET_CRIT
+#  cat $TMP
+#  rm -f $TMP
+#
+#  exit $RET_CRIT
+
+# NFSエラー
+elif [ $NFS_RESULT -ne 0 -a $MOUNT_RESULT -eq 0 ]; then
+  echo "NFS mount CRIT"
+  printResult $RET_CRIT
+#  cat $TMP
+#  rm -f $TMP
+#
+#  exit $RET_CRIT
+
+# ReadOnlyエラー
+elif [ $NFS_RESULT -eq 0 -a $MOUNT_RESULT -ne 0 ]; then
+  echo "ReadOnly CRIT"
+  printResult $RET_CRIT
+#  cat $TMP
+#  rm -f $TMP
+#
+#  exit $RET_CRIT
+
+else
+  echo "NFS mount and ReadOnly OK"
+  printResult $RET_OK
+#  cat $TMP
+#  rm -f $TMP
+#  exit $RET_OK
+fi

@@ -1,0 +1,156 @@
+#!/bin/bash
+
+HOST=localhost
+PORT=9200
+LIMIT=1.0
+TIMEOUT=5
+OK=0
+CRITICAL=2
+NODE_NUM=10
+error_replica=()
+error_index=()
+
+### option
+isHelp=false
+while getopts hH:N:p:c:n: OPT
+do
+  case $OPT in
+    h) isHelp=true;;
+    H) HOST=$OPTARG;;
+    N) NODENAME=$OPTARG;;
+    p) PORT=$OPTARG;;
+    c) LIMIT=$OPTARG;;
+    n) NODE_NUM=$OPTARG;;
+  esac
+done
+
+if $isHelp; then
+  echo "usage: $0 [-h] [-H hostname] [-N nodename] [-p port] [-c CRIT] [-n node num]"
+  exit 0
+fi
+
+# check curl error
+function chkCurlError() {
+  if [ $1 -ne 0 ]; then
+    shift
+    echo "curl failed"
+    echo "$*"
+    exit ${CRITICAL}
+  fi
+}
+
+cat_master=\
+`curl -i http://${HOST}:${PORT}/_cat/master \
+--max-time ${TIMEOUT} \
+-w " 
+response statistics
+connect:%{time_connect}
+transfer:%{time_pretransfer}
+starttransfer%{time_starttransfer}
+total:%{time_total}
+" 2>&1`
+
+chkCurlError $? ${cat_master}
+
+# master check(slave exit)
+echo "${cat_master}" | grep -q $NODENAME
+if [ $? -ne 0 ]; then
+  echo "node is slave"
+  echo "${cat_master}"
+  exit ${OK}
+else 
+  echo "node is master"
+fi
+
+result=\
+`curl -i http://${HOST}:${PORT}/_cluster/health?pretty \
+--max-time ${TIMEOUT} \
+-w " 
+response statistics
+connect:%{time_connect}
+transfer:%{time_pretransfer}
+starttransfer%{time_starttransfer}
+total:%{time_total}
+" 2>&1`
+
+chkCurlError $? ${result}
+
+# cluster node number error
+echo "${result}" | grep -q "\"number_of_nodes\" : ${NODE_NUM}"
+if [ $? -ne 0 ]; then
+  echo "cluster node error"
+  echo "${result}"
+  exit ${CRITICAL}
+fi
+
+# response time error
+time=`echo "${result}" | grep "total:" | cut -d':' -f2`
+if [ $(echo "${time} > ${LIMIT}" | bc) -ne 0 ]; then
+  echo "cluster response time error"
+  echo "${result}"
+  exit ${CRITICAL}
+fi
+
+cat_aliases=\
+`curl -s http://${HOST}:${PORT}/_cat/aliases 2>&1`
+
+chkCurlError $? ${cat_aliases}
+
+index_list=`echo "${cat_aliases}" |grep -v '_test' |awk '{print $2}'`
+
+# check aliased index status
+for index in $index_list ; do
+  cat_indices=\
+`curl -s http://${HOST}:${PORT}/_cat/indices/$index 2>&1`
+  
+  chkCurlError $? ${cat_indices}
+
+  echo "${cat_indices}" |awk '{print $1}' |grep -q 'green'
+  if [ $? -ne 0 ]; then
+    index_state=`echo "${cat_indices}" |tr -s ' ' '@'`
+    error_index=("$index_state" "${error_index[@]}")
+  fi
+done
+
+if [ ${#error_index[@]} -ne 0 ]; then
+  echo "index status error"
+  for i in ${error_index[@]} ; do
+    echo "$i" |tr -s '@' ' '
+  done
+
+  echo
+  echo "${result}"
+  exit ${CRITICAL}
+fi
+
+# check replication
+cat_shards=\
+`curl -s http://${HOST}:${PORT}/_cat/shards 2>&1`
+
+chkCurlError $? ${cat_shards}
+
+for i in $index_list ; do
+  pri_num=`echo "$cat_shards" |grep $i |awk '$3 == "p" {print}' |wc -l`
+  rep_num=`echo "$cat_shards" |grep $i |awk '$3 == "r" {print}' |wc -l`
+
+  if [ $pri_num -ne $rep_num ];then
+    error_replica=("$iのshardがレプリケーションされていません" "${error_replica[@]}")
+  fi
+done
+
+if [ ${#error_replica[@]} -ne 0 ]; then
+  echo "Replication failed"
+  for i in ${error_replica[@]} ; do
+    echo $i
+  done
+
+  echo
+  echo "${result}"
+  exit ${CRITICAL}
+fi
+
+# all OK
+echo "Cluster OK"
+echo "${result}"
+
+exit ${OK}

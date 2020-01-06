@@ -1,0 +1,151 @@
+#!/bin/bash
+
+# mib list
+WORKDIR=/usr/local/nagios/libexec
+MIB_LIST=$WORKDIR/check_dell_mib.lst
+DELL_STATUS=$WORKDIR/check_dell_status.lst
+
+function usage(){
+  cat << EOL
+  Usage
+    check_dell_hardware IPaddress [debug]
+
+  Require files:
+    $MIB_LIST
+    $DELL_STATUS
+EOL
+exit 0
+}
+
+function getStat() {
+  case $1 in
+    STAT)           echo ${STAT[$2]} ;;
+    STAT_REDUND)    echo ${STAT_REDUND[$2]} ;;
+    STAT_DISK)      echo ${STAT_DISK[$2]} ;;
+    STAT_DISK_VIRT) echo ${STAT_DISK_VIRT[$2]} ;;
+    STAT_DISK_PREDICT) echo ${STAT_DISK_PREDICT[$2]} ;;
+  esac
+}
+
+# arguments & file check
+[ $# -eq 0 ] && usage
+HOST=$1
+[ ! -e $MIB_LIST -o ! -e $DELL_STATUS ] && usage
+
+# snmp parameter
+COM=public
+WALK="/usr/bin/snmpwalk -v2c -t 30 -c $COM -O n $HOST"
+
+# temp file
+TMP=`mktemp`   # snmpwalk出力先
+TMP2=`mktemp`  # 結果出力先
+
+# Nagios status
+RET_OK=0
+RET_WARN=1
+RET_CRIT=2
+RET_UNKNOWN=3
+
+# Check parameter
+RESULT=0
+OID_NO_SUM=0
+IGNORE_FLAG=0
+
+# OID parent list
+OID_PARENT=`cat $MIB_LIST |awk '{print $2}' |cut -f1-10 -d. |uniq`
+OID_PARENT_CNT=`cat $MIB_LIST |awk '{print $2}' |cut -f1-10 -d. |uniq |wc -l`
+
+# status
+source $DELL_STATUS
+
+#
+# Main
+#
+
+# OIDの10桁目までの値でforループを回す
+for oid_parent in $OID_PARENT
+do
+  # snmpwalk でテキスト出力
+  [ ! -z $2 ] && [ $2 = debug ] && echo "-------- $oid_parent"
+  $WALK $oid_parent >$TMP
+
+  # snmp失敗時はexit
+  [ $? -ne 0 ] && { echo "snmpwalk failed,exited" ;rm -f $TMP $TMP2 ;exit $RET_UNKNOWN ; }
+
+  # OIDが存在するかチェック
+  OID_NO_CNT=`grep 'No Such' $TMP |wc -l`
+
+  # MIBリストから対象のOIDを抽出し、whileループ
+  while read name mib status_array expect ignore
+  do
+    # OIDでsnmpwalk出力を検索し、期待ステータス以外でフィルタ
+    [ ! -z $2 ] && [ $2 = debug ] && echo "**** $name $mib $status_array $expect $ignore"
+    [ ! -z $2 ] && [ $2 = debug ] && grep ${mib}\\. $TMP
+    count=`grep ${mib}\\\. $TMP |awk "\\$4 != $expect {print \\$4}" |wc -l`
+
+    # 期待ステータス以外ならば、ステータス取得
+    if [ $count -ne 0 ];then
+
+      for value in `grep ${mib}\\\. $TMP |awk "\\$4 != $expect {print \\$4}"`
+      do
+        # 無視フラグ初期化
+        IGNORE_FLAG=0
+
+        # 無視フラグが0でなければ、スキップ
+        IGNORE_LIST=`echo $ignore |tr ',' '\n'`
+        for ig in $IGNORE_LIST
+        do
+          [ $value -eq $ig ] && IGNORE_FLAG=$(($IGNORE_FLAG + 1))
+        done
+
+        [ ! -z $2 ] && [ $2 = debug ] && echo "IGNORE_FLAG: $IGNORE_FLAG"
+
+        # 無視フラグが0でなければ、スキップ
+        if [ $IGNORE_FLAG -ne 0 ]; then
+          continue
+        else
+          [ ! -z $2 ] && [ $2 = debug ] && echo "-- $name $value"
+          data=`getStat $status_array $value`
+
+          # 区切り文字でステータス、備考を取得
+          stat=`echo $data |awk -F'@@@' '{print $1}'`
+          remark=`echo $data |awk -F'@@@' '{print $2}'`
+
+          echo "${name}: $stat - $remark" >>$TMP2
+
+          # 結果フラグをインクリメント
+          RESULT=$(($RESULT + 1))
+        fi
+
+      done
+
+    fi
+
+  done  < <(grep $oid_parent $MIB_LIST)
+
+  # OIDが見つからない場合のチェック
+  [ $OID_NO_CNT -ne 0 ] && OID_NO_SUM=$(($OID_NO_SUM + 1))
+
+done
+
+# 結果と正否を返却
+if [ $OID_PARENT_CNT -eq $OID_NO_SUM ]; then
+  echo "DELL Hardware Unknown"
+  echo "Install Open Manage Server Administrator"
+  cat $TMP2
+  rm -f $TMP $TMP2
+  exit $RET_UNKNOWN
+fi
+
+if [ $RESULT -ne 0 ]; then
+  echo "DELL Hardware NG"
+  cat $TMP2 |uniq
+  rm -f $TMP $TMP2
+  exit $RET_CRIT
+
+else
+  echo "DELL Hardware OK"
+  cat $TMP2
+  rm -f $TMP $TMP2
+  exit $RET_OK
+fi

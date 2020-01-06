@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# files
+WORKDIR=/usr/local/nagios/libexec
+
+# param
+OK_STATUS='System Status: OK'
+IGNORE='(INFO)'
+USER=hoge
+PASS=hoge
+
+function usage(){
+  cat << EOL
+  Usage
+    check_fujitsu_hardware IPaddress
+EOL
+exit 0
+}
+
+# arguments check
+[ $# -eq 0 ] && usage
+HOST=$1
+
+# Nagios status
+RET_OK=0
+RET_WARN=1
+RET_CRIT=2
+RET_UNKNOWN=3
+
+# Check parameter
+RESULT=0
+
+#
+# Main
+#
+
+# ヘルスチェック
+cat << EOL | /usr/bin/expect -f - |grep "$OK_STATUS" >/dev/null
+set timeout 5
+spawn ssh $USER@$HOST
+expect "$USER@$HOST's password:"
+send "$PASS\n"
+sleep 1
+send "0\n"
+interact
+EOL
+
+RESULT=$?
+
+# 結果と正否を返却
+if [ $RESULT -eq 0 ]; then
+  echo "Fujitsu Hardware OK"
+  exit $RET_OK
+
+else
+  echo "Fujitsu Hardware NG"
+  echo "Check Server View"
+  echo "http://$HOST/"
+
+  exit $RET_CRIT
+fi

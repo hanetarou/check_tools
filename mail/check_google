@@ -1,0 +1,89 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+#
+# Googleの障害情報を取得して、メールを送信する
+#
+
+import sys
+import feedparser
+import os.path
+import time
+import smtplib
+import pytz
+from pprint import pprint
+from datetime import datetime, timedelta
+from email.header import Header
+from email.mime.text import MIMEText
+from socket import gethostname
+
+# チェックするRSS
+rss_list = {
+'Google Apps':'http://www.google.com/appsstatus/rss/ja'
+}
+# 更新情報を取得したい時間(分)
+delta_minutes = 30
+delta_minutes = 24*60
+# メール情報
+mail_to     = 'hoge'
+mail_from   = 'hoge'
+subject     = 'Google障害情報'
+
+###
+# GoogleのRSSをチェックして、最新フィードを取得する
+def getFeed(uri, time_ago):
+  # RSSを取得
+  data = feedparser.parse(uri)
+
+  # delta_time前に更新されたフィードを取得する
+  feeds = []
+  for feed in data['entries']:
+    published_time = datetime( *(feed['pubDate'])[:6] )
+    # GMT時間取得
+    updated_utc = datetime( *feed.updated_parsed[:6] )
+    # awareなdatetimeオブジェクトへ変換
+    updated = pytz.timezone('GMT').localize( updated_utc )
+    if published_time > time_ago:
+      feeds.append(feed)
+  return feeds
+
+###
+# メールを通知する
+def sendMail(from_addr, to_addr, subject, message):
+  msg = MIMEText(message, 'plain', 'utf-8')
+  msg['From'] = from_addr
+  msg['To'] = to_addr
+  msg['Subject'] = Header(subject, 'utf-8')
+
+  #s = smtplib.SMTP()
+  #s.connect()
+  #s.sendmail(from_addr, to_addr, msg.as_string())
+  #s.close()
+
+###
+# main
+
+# serviceごとに更新分のフィードをまとめる
+feed_message = {}
+# 検索時間（JST）を取得
+time_jst = datetime.now() - timedelta(minutes=delta_minutes)
+# awareなdatetimeオブジェクトへ変換
+time_ago = pytz.timezone('Asia/Tokyo').localize(time_jst)
+for rss in rss_list.items():
+  service = rss[0]
+  uri = rss[1]
+  value = []
+
+  # 更新分のフィードの取得
+  feed_list = getFeed(uri, time_ago)
+  # serviceごとにフィードをまとめる
+  for feed in feed_list:
+    value.append( u"公開日時: %s\nタイトル: %s\n概要: %s\n" % (feed['published'], feed['title'], feed['summary']) )
+  feed_message.update( {service:value} )
+
+# 更新フィードがあればメールを送信する
+body = ""
+for item in feed_message.items():
+  if len(item[1]):
+    body += u"%s 障害情報\n詳細は http://www.google.com/appsstatus#hl=ja&v=status を確認してください。\n\n%s\n\n" % (item[0], "\n".join(item[1]))
+if body:
+  sendMail(mail_from, mail_to, subject, body)

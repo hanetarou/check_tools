@@ -1,0 +1,56 @@
+#!/bin/bash
+
+### Set parameter
+USER=hoge
+PASSWORD=hoge
+MYSQL=/usr/bin/mysql
+TARGET_TABLE=monitor.update_check
+
+# nagios setting
+STATE_OK=0        # define the exit code if status is OK
+STATE_WARNING=1   # define the exit code if status is Warning
+STATE_CRITICAL=2  # define the exit code if status is Critical
+STATE_UNKNOWN=3   # define the exit code if status is Unknown
+
+### option
+isHelp=false
+while getopts hH:p:c:t: OPT
+do
+  case $OPT in
+    h) isHelp=true;;
+    H) HOST=$OPTARG;;
+    p) PORT=$OPTARG;;
+    c) CONNECT_TIMEOUT=$OPTARG;;          # MySQL Parameter
+    t) TIMEOUT_PERIOD=$OPTARG;;           # To check enable to write into MySQL Databases
+  esac
+done
+
+if $isHelp; then
+  echo "usage: $0 [-h] [-H hostname] [-p port] [-t time-out period (second)]"
+  exit 0
+fi
+
+SQL="show slave status\G"
+### UPDATE MySQL data
+RESULT=`${MYSQL} -u${USER} -p${PASSWORD} -h $HOST -P $PORT --connect_timeout $CONNECT_TIMEOUT -e "$SQL" | wc -l`
+
+if [ ${RESULT} -ne 0 ]; then
+  echo -e "このDBはSlaveDBです"
+  exit ${STATE_CRITICAL}
+fi
+
+### Set parameter
+PRESENT_ABSOLUTE_PATH=$(cd $(dirname $0) && pwd)
+SQL="update ${TARGET_TABLE} set update_datetime = now()""
+
+### UPDATE MySQL data
+timeout -s SIGALRM ${TIMEOUT_PERIOD} bash -c "${MYSQL} -u${USER} -p${PASSWORD} -h $HOST -P $PORT --connect_timeout $CONNECT_TIMEOUT -e '$SQL'"
+
+### Evaluate MySQL state
+if [ $? = 0 ]; then
+  echo -e "MySQL is OK."
+  exit ${STATE_OK}
+fi
+
+echo -e "MySQLへの更新クエリに失敗しました( Threshold : ${TIMEOUT_PERIOD}s )"
+exit ${STATE_CRITICAL}

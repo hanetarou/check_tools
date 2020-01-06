@@ -1,0 +1,81 @@
+#!/usr/bin/ruby
+#
+# NATテーブルの数を取得する
+
+require 'rubygems'
+require 'net/ssh'
+
+OK = 0
+NG = 2
+
+#$mode = "debug"
+$mode = ""
+$message = ""
+$result = OK
+$host = ""
+$user = ""
+$password = ""
+$limit = 0
+
+def debug(str)
+  if defined?($mode) && $mode=="debug"
+    puts str
+  end
+end
+
+if ARGV.size != 4
+  puts "usage: $0 host user password limit"
+  exit(NG)
+end
+
+$host = ARGV[0]
+$user = ARGV[1]
+$password = ARGV[2]
+$limit = ARGV[3].to_i
+
+# RTXから"show nat descriptor address all | grep use"の結果を取得する
+Net::SSH.start($host, $user, :password => $password) do |ssh|
+  ssh.open_channel do |channel|
+    channel.send_channel_request "shell" do |ch, success|
+      debug("channel.send_channel_request")
+      if success
+        debug("channel.send_channel_request success")
+        ch.send_data("show nat descriptor address all\n")
+        ch.send_data("\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n")
+        debug("channel.send_channel_request send")
+        ch.send_data("exit\n")
+        debug("exit")
+        ch.process
+        debug("process")
+        ch.wait
+        debug("wait")
+        ch.eof!
+        debug("channel.send_channel_request eof")
+      else
+        p "channel request error"
+        $result = NG
+      end
+    end
+
+    channel.on_data do |ch, data|
+      debug("on_data")
+      $message += data
+    end
+  end
+  ssh.loop
+end
+
+# NATテーブルの数を取得する
+/[0-9]+? used/ =~ $message
+/[0-9]+? / =~ $&
+$nat = $&.to_i
+
+# NATテーブルの数が閾値以下の場合アラートを上げる
+if $nat > $limit then
+  puts "NAT Table is NG: #{$&}(limit #{$limit})"
+  puts $message
+  exit(NG)
+end
+
+puts "NAT Table is OK: #{$&}(limit #{$limit})"
+exit($result)

@@ -1,0 +1,83 @@
+<?php
+# check hinemos5 jobs status
+
+
+$HOST="localhost";
+$PORT=5432;
+$USER="hoge";
+$DB="hinemos";
+$PASSWORD="hoge";
+
+$TIME=time()-(1 * 24 * 60 * 60); # N日 * 24時間 * 60分 * 60秒
+$DATE=date("Y-m-d H:i:s", $TIME);
+
+# nagiosの戻り値
+$OK=0;
+$WARNING=1;
+$CRITICAL=2;
+$UNKNOWN=3;
+
+# オプション解析
+$options = getopt('hH:p:');
+if(array_key_exists('h', $options)) {
+  print("usage: $argv[0] [-h] [-H HOST] [-p PORT]\n");
+  exit($CRITICAL);
+}
+$HOST = array_key_exists('H', $options) ? $options['H'] : $HOST;
+$PORT = array_key_exists('p', $options) ? $options['p'] : $PORT;
+
+# DBに接続する
+$db = pg_connect("host=$HOST port=$PORT dbname=$DB user=$USER password=$PASSWORD connect_timeout=5");
+if(!$db) {
+  printf("pg_connect failed: %s\n", pg_last_error());
+  exit($UNKNOWN);
+}
+
+# エラージョブを取得する
+$sql = "select job.session_id, job.job_id, job.status, job.start_date, job.end_date, job.end_value, node.facility_id, node.message
+from
+  log.cc_job_session_job job, log.cc_job_session_node node
+where (1=1)
+  and job.session_id  = node.session_id
+  and job.job_id      = node.job_id
+  and job.end_value  != 0
+  and job.session_id not in (select session_id from log.cc_job_session_job where status = 201)
+  and job.session_id not in (select session_id from log.cc_job_session_job where status = 301 and parent_jobunit_id = 'ROOT' and parent_job_id = 'TOP')
+  and job.session_id not in ('20150302220431-000','20150302220004-000')
+#  and job.job_id not like '%'
+";
+
+#$result = pg_query_params($db, $sql, array($DATE));
+$result = pg_query($db, $sql);
+if(!$result) {
+  printf("pg_query_params failed: %s\n", pg_last_error());
+  exit($WARNING);
+}
+
+# DBから切断する
+pg_close($db);
+
+# エラージョブがなければ正常終了する
+if(pg_num_rows($result) == 0) {
+  print("JOB OK\n");
+  exit($OK);
+}
+
+# エラージョブを出力してエラー終了する
+$msg="ジョブの実行に失敗しました\n";
+while($item = pg_fetch_row($result)) {
+  $msg .= sprintf(
+"セッションID： %s
+ジョブID： %s
+ジョブステータス： %d
+ジョブ実行時間： %s
+ジョブ終了時間： %s
+ジョブ終了値： %s
+ファシリティID： %s
+メッセージ：
+%s\n\n",
+$item[0], $item[1], $item[2], $item[3], $item[4], $item[5], $item[6], $item[7]
+  );
+}
+printf( "%s", str_replace("`", "'", $msg, $count) );
+exit($CRITICAL);

@@ -1,0 +1,100 @@
+#!/usr/bin/python
+# -*- coding:utf-8 -*-
+
+import sys
+import smtplib
+# pip install requests
+import requests
+import json
+from socket import gethostname
+from parseFile import parseFile
+from email.header import Header
+from email.mime.text import MIMEText
+
+debug        = 0
+slack_url    = 'https://hooks.slack.com/services/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'
+mail_subject = '【%s】アラートが停止しています' % gethostname()
+mail_from    = 'hoge' % gethostname()
+mail_to      = 'hoge'
+cset         = 'utf-8'
+
+def output(message, level):
+  if debug >= level:
+    print message
+
+def notify_slack(message):
+  values = {'text': message, 'username': gethostname(), 'channel': 'sp-alert' }
+  content = json.dumps(values, ensure_ascii=False)
+  answer = requests.post(slack_url, data=content)
+  if debug !=0:
+    print('--- values')
+    print(values)
+    print('--- content')
+    print(content)
+    print('--- answer.txt')
+    print(answer.text)
+
+def sendmail(message):
+  msg = MIMEText(message, 'plain', cset)
+  msg['Subject'] = Header(mail_subject, cset)
+  msg['From'] = mail_from
+  msg['To'] = mail_to
+  if debug == 0:
+    s = smtplib.SMTP()
+    s.connect()
+    s.sendmail(mail_from, mail_to, msg.as_string())
+    s.close()
+  else:
+    output("%s" % msg, 1)
+
+# parse status
+nagios = {}
+if parseFile( "/usr/local/nagios/var/status.dat", nagios) != 0:
+  sendmail("status get error")
+  sys.exit(1)
+
+# check service
+alert_host = []
+acknowledge_host = []
+for host in nagios["service"].items():
+  for service in host[1].items():
+    output(service, 3)
+
+    try:
+      if service[1]["notifications_enabled"] == '0' or service[1]["active_checks_enabled"] == '0':
+        #alert_host = {host[0], service[0]}
+        alert_host.append( '%s: %s' % (host[0], service[0]) )
+        output('%s: %s' % (host[0], service[0]), 1)
+    except KeyError:
+      acknowledge_host.append( '%s: %s' % (host[0], service[0]) )
+      output('KeyError %s: %s' % (host[0], service[0]), 1)
+      output(service, 2)
+
+# send alert mail if disable check or notice for service
+if len(alert_host) != 0 or len(acknowledge_host) != 0:
+  sendmail("""
+下記のサービス監視が停止しています。問題なければアラートを有効にしてください。
+
+**Disable**
+%s
+
+**Acknowledge**
+%s
+
+""" % ("\n".join(alert_host), '\n'.join(acknowledge_host) ))
+  notify_slack("""
+下記のサービス監視が停止しています。問題なければアラートを有効にしてください。
+
+*Disable*
+%s
+
+*Acknowledge*
+%s
+
+""" % ("\n".join(alert_host), '\n'.join(acknowledge_host) ))
+
+else:
+  sendmail('停止しているサービス監視はありません。' )
+  notify_slack('停止しているサービス監視はありません。')
+
+sys.exit(0)

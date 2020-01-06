@@ -1,0 +1,12 @@
+#!/bin/bash
+
+command_file='/usr/local/nagios/var/rw/nagios.cmd'
+status_file='/usr/local/nagios/var/status.dat'
+
+hosts=`awk -F'=' '/host_name/ {print $2}' $status_file | sort | uniq`
+
+echo -e "${hosts}" | while read host; do
+  echo "Disable service check of ${host}"
+  echo "[$(date +%s)] DISABLE_HOST_SVC_NOTIFICATIONS;${host}" > $command_file
+  echo "[$(date +%s)] DISABLE_HOST_NOTIFICATIONS;${host}" > $command_file
+done

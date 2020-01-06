@@ -1,0 +1,35 @@
+#!/bin/bash
+
+host=${1}
+port=${2}
+
+# nagios setting
+STATE_OK=0        # define the exit code if status is OK
+STATE_WARNING=1   # define the exit code if status is Warning
+STATE_CRITICAL=2  # define the exit code if status is Critical
+STATE_UNKNOWN=3   # define the exit code if status is Unknown
+
+if [ ${#} -ne 2 ]; then
+  echo "Usage: $0 host port"
+  exit ${STATE_CRITICAL}
+fi
+
+if [ `which jq 1>/dev/null 2>&1` ]; then
+  echo 'jq command not found. please exec `yum install jq`.'
+  exit ${STATE_CRITICAL}
+fi
+
+#yesterday=`date +%s`
+yesterday=`date +%s -d yesterday`
+timestamp=`curl http://${host}:${port}/job/production-monitor/lastSuccessfulBuild/api/json | jq -r '.timestamp' | awk '{print strftime("%s", substr($1,0,10))}'`
+
+echo "production-monitorが最後に成功した時間: '`date -d @${timestamp}`'"
+#echo "<http://${host}:${port}/view/monitor/\|こちら>を確認してジョブを再開してください"
+
+if [ ${yesterday} -gt ${timestamp} ]; then
+  echo "Jenkinsのmonitorジョブが1日以上止まっています。"
+  echo "http://${host}:${port}/view/monitor/ を確認してジョブを再開してください"
+  exit ${STATE_CRITICAL}
+fi
+
+exit ${STATE_OK}
